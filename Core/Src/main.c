@@ -61,6 +61,8 @@ typedef struct
 
     task_state_t state;
 
+    uint32_t saved_regs[8];
+
     void (*task_func)(void);
 
 } task_t;
@@ -69,9 +71,12 @@ extern task_t tasks[];
 void task_delay(uint32_t delay_ms);
 void init_task_stack(task_t *task);
 task_t* get_next_task(void);
+void save_context(task_t *task);
+void restore_context(task_t *task);
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
 task_t *current_task;
+task_t *next_task;
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
@@ -135,44 +140,7 @@ void task_delay(uint32_t delay_ms)
 
     current_task->state = TASK_BLOCKED;
 }
-/* USER CODE END PFP */
-task_t tasks[NUM_TASKS] =
-{
-    {
-        .wake_tick = 0,
-        .priority = 2,
-        .state = TASK_READY,
-        .task_func = led_green_task
-    },
 
-    {
-        .wake_tick = 0,
-        .priority = 5,
-        .state = TASK_READY,
-        .task_func = led_orange_task
-    }
-};
-
-void init_task_stack(task_t *task)
-{
-    uint32_t *sp;
-
-    sp = &task->stack[STACK_SIZE - 1];
-
-    *(sp--) = 0x01000000;               // xPSR
-    *(sp--) = (uint32_t)task->task_func; // PC
-    *(sp--) = 0xFFFFFFFD;               // LR (placeholder)
-
-    *(sp--) = 0; // R12
-    *(sp--) = 0; // R3
-    *(sp--) = 0; // R2
-    *(sp--) = 0; // R1
-    *(sp--) = 0; // R0
-
-    task->sp = sp + 1;
-}
-/* Private user code ---------------------------------------------------------*/
-/* USER CODE BEGIN 0 */
 task_t* get_next_task(void)
 {
     task_t *highest_task = NULL;
@@ -192,6 +160,78 @@ task_t* get_next_task(void)
     return highest_task;
 }
 /* USER CODE END 0 */
+void context_switch(task_t *next)
+{
+    save_context(current_task);
+
+    current_task = next;
+
+    restore_context(current_task);
+}
+
+void save_context(task_t *task)
+{
+    for(int i = 0; i < 8; i++)
+    {
+        task->saved_regs[i] = 0x44440000 + i;
+    }
+
+    task->sp = (uint32_t *)get_psp();
+}
+
+void restore_context(task_t *task)
+{
+    set_psp((uint32_t)task->sp);
+}
+/* USER CODE END PFP */
+void init_task_stack(task_t *task)
+{
+    uint32_t *sp;
+
+    sp = &task->stack[STACK_SIZE - 1];
+
+    *(sp--) = 0x01000000;               // xPSR
+    *(sp--) = (uint32_t)task->task_func; // PC
+    *(sp--) = 0xFFFFFFFD;               // LR (placeholder)
+
+    *(sp--) = 0; // R12
+    *(sp--) = 0; // R3
+    *(sp--) = 0; // R2
+    *(sp--) = 0; // R1
+    *(sp--) = 0; // R0
+
+    *(sp--) = 0; // R11
+    *(sp--) = 0; // R10
+    *(sp--) = 0; // R9
+    *(sp--) = 0; // R8
+    *(sp--) = 0; // R7
+    *(sp--) = 0; // R6
+    *(sp--) = 0; // R5
+    *(sp--) = 0; // R4
+
+    task->sp = sp + 1;
+}
+
+task_t tasks[NUM_TASKS] =
+{
+    {
+        .wake_tick = 0,
+        .priority = 2,
+        .state = TASK_READY,
+        .task_func = led_green_task
+    },
+
+    {
+        .wake_tick = 0,
+        .priority = 5,
+        .state = TASK_READY,
+        .task_func = led_orange_task
+    }
+};
+
+
+/* Private user code ---------------------------------------------------------*/
+/* USER CODE BEGIN 0 */
 
 /**
   * @brief  The application entry point.
@@ -202,8 +242,6 @@ int main(void)
 
   /* USER CODE BEGIN 1 */
 	current_task = &tasks[0];
-	volatile uint32_t psp_val;
-	volatile uint32_t control_val;
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -240,9 +278,6 @@ int main(void)
 
   __ISB();
 
-  psp_val = get_psp();
-  control_val = get_control();
-
   /* USER CODE END 2 */
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
@@ -264,12 +299,16 @@ int main(void)
 	    }
 
 	    /* Select highest priority READY task */
-	    task_t *next_task = get_next_task();
+	    next_task = get_next_task();
 
 	    if(next_task != NULL)
 	    {
-		    current_task = next_task;
-		    current_task->state = TASK_RUNNING;
+	    	if(next_task != current_task)
+	    	{
+	    	    context_switch(next_task);
+	    	}
+
+	    	current_task->state = TASK_RUNNING;
 	    	current_task->task_func();
 	    }
 
