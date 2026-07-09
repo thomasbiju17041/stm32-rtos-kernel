@@ -46,7 +46,48 @@ extern "C" {
 
 /* Exported macro ------------------------------------------------------------*/
 /* USER CODE BEGIN EM */
+#define NUM_TASKS 2
+#define STACK_SIZE 128
 
+
+
+
+typedef enum
+{
+    TASK_READY,
+    TASK_RUNNING,
+    TASK_BLOCKED
+} task_state_t;
+
+typedef struct
+{
+    uint32_t *sp;
+
+    uint32_t stack[STACK_SIZE];
+
+    uint32_t wake_tick;
+
+    uint32_t priority;
+
+    task_state_t state;
+
+    void (*task_func)(void);
+
+} task_t;
+/* USER CODE END PD */
+extern task_t tasks[];
+void task_delay(uint32_t delay_ms);
+void init_task_stack(task_t *task);
+task_t* get_next_task(void);
+__attribute__((naked)) void save_context(void);
+void save_current_task_context(void);
+void restore_current_task_context(void);
+void start_scheduler(void);
+void task_exit_error(void);
+void trigger_pendsv(void);
+void schedule_next_task(void);
+void idle_task(void);
+void task_yield(void);
 /* USER CODE END EM */
 
 /* Exported functions prototypes ---------------------------------------------*/

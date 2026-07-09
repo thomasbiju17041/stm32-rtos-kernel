@@ -1,3 +1,4 @@
+
 /* USER CODE BEGIN Header */
 /**
   ******************************************************************************
@@ -22,11 +23,17 @@
 #include "stm32f4xx_it.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+extern task_t *current_task;
+extern task_t *next_task;
 /* USER CODE END Includes */
-
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN TD */
-
+extern void save_current_task_context(void);
+extern void restore_current_task_context(void);
+extern task_t* get_next_task(void);
+extern void trigger_pendsv(void);
+__attribute__((naked)) void save_context(void);
+__attribute__((naked)) void restore_context(void);
 /* USER CODE END TD */
 
 /* Private define ------------------------------------------------------------*/
@@ -141,14 +148,26 @@ void UsageFault_Handler(void)
 /**
   * @brief This function handles System service call via SWI instruction.
   */
-void SVC_Handler(void)
+__attribute__((naked)) void SVC_Handler(void)
 {
-  /* USER CODE BEGIN SVCall_IRQn 0 */
+    __asm volatile(
+        "LDR R0, =current_task      \n"
+        "LDR R0, [R0]               \n"
+        "LDR R0, [R0]               \n"
 
-  /* USER CODE END SVCall_IRQn 0 */
-  /* USER CODE BEGIN SVCall_IRQn 1 */
+        "MSR PSP, R0                \n"
 
-  /* USER CODE END SVCall_IRQn 1 */
+        "MOVS R0, #2                \n"
+        "MSR CONTROL, R0            \n"
+        "ISB                        \n"
+
+        "MRS R0, PSP                \n"
+        "LDMIA R0!, {R4-R11}        \n"
+        "MSR PSP, R0                \n"
+
+        "LDR LR, =0xFFFFFFFD        \n"
+        "BX LR                      \n"
+    );
 }
 
 /**
@@ -167,28 +186,55 @@ void DebugMon_Handler(void)
 /**
   * @brief This function handles Pendable request for system service.
   */
-void PendSV_Handler(void)
+__attribute__((naked)) void PendSV_Handler(void)
 {
-  /* USER CODE BEGIN PendSV_IRQn 0 */
+    __asm volatile(
+        /* Save R4-R11 onto current PSP */
+        "MRS R0, PSP                \n"
+        "STMDB R0!, {R4-R11}        \n"
 
-  /* USER CODE END PendSV_IRQn 0 */
-  /* USER CODE BEGIN PendSV_IRQn 1 */
+        /* Save updated PSP into current_task->sp */
+        "LDR R1, =current_task      \n"
+        "LDR R2, [R1]               \n"
+        "STR R0, [R2]               \n"
 
-  /* USER CODE END PendSV_IRQn 1 */
+        /* Select next task */
+        "PUSH {LR}                  \n"
+        "BL schedule_next_task      \n"
+        "POP {LR}                   \n"
+
+        /* Load new task PSP */
+        "LDR R1, =current_task      \n"
+        "LDR R2, [R1]               \n"
+        "LDR R0, [R2]               \n"
+
+        /* Restore R4-R11 */
+        "LDMIA R0!, {R4-R11}        \n"
+        "MSR PSP, R0                \n"
+
+        "BX LR                      \n"
+    );
 }
-
 /**
   * @brief This function handles System tick timer.
   */
 void SysTick_Handler(void)
 {
-  /* USER CODE BEGIN SysTick_IRQn 0 */
+    HAL_IncTick();  // Blue LED
 
-  /* USER CODE END SysTick_IRQn 0 */
-  HAL_IncTick();
-  /* USER CODE BEGIN SysTick_IRQn 1 */
+    uint32_t now = HAL_GetTick();
 
-  /* USER CODE END SysTick_IRQn 1 */
+    for(int i = 0; i < NUM_TASKS; i++)
+    {
+    	if(tasks[i].state == TASK_BLOCKED &&
+    	   now >= tasks[i].wake_tick)
+    	{
+    	    tasks[i].state = TASK_READY;
+            HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_15); // blue
+    	}
+    }
+
+    trigger_pendsv();
 }
 
 /******************************************************************************/

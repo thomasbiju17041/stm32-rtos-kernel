@@ -36,43 +36,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define NUM_TASKS 2
-#define STACK_SIZE 128
 
-
-
-
-typedef enum
-{
-    TASK_READY,
-    TASK_RUNNING,
-    TASK_BLOCKED
-} task_state_t;
-
-typedef struct
-{
-    uint32_t *sp;
-
-    uint32_t stack[STACK_SIZE];
-
-    uint32_t wake_tick;
-
-    uint32_t priority;
-
-    task_state_t state;
-
-    uint32_t saved_regs[8];
-
-    void (*task_func)(void);
-
-} task_t;
-/* USER CODE END PD */
-extern task_t tasks[];
-void task_delay(uint32_t delay_ms);
-void init_task_stack(task_t *task);
-task_t* get_next_task(void);
-void save_context(task_t *task);
-void restore_context(task_t *task);
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
 task_t *current_task;
@@ -89,56 +53,57 @@ void SystemClock_Config(void);
 void MX_USB_HOST_Process(void);
 
 /* USER CODE BEGIN PFP */
-static inline void set_control(uint32_t control)
-{
-    __set_CONTROL(control);
-}
-
-static inline uint32_t get_control(void)
-{
-    return __get_CONTROL();
-}
-
-static inline void set_psp(uint32_t psp)
-{
-    __set_PSP(psp);
-}
-
-static inline uint32_t get_psp(void)
-{
-    return __get_PSP();
-}
-
-static inline uint32_t* get_current_sp(void)
-{
-    return (uint32_t*)get_psp();
-}
-
-static inline void save_current_task_sp(void)
-{
-    current_task->sp = get_current_sp();
-}
-
 void led_green_task(void)
 {
-    HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_12);
+    while (1)
+    {
+        HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_12);
 
-    task_delay(500);
+        task_delay(500);
+    }
+
 }
 
 void led_orange_task(void)
 {
-	HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13);
+    while (1)
+    {
+        HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13);
 
-	task_delay(1000);
+        task_delay(500);
+    }
+
 }
+
+void idle_task(void)
+{
+    while(1)
+    {
+        __WFI();
+    }
+}
+void schedule_next_task(void)
+{
+    task_t *next = get_next_task();
+
+    if(next != NULL)
+        current_task = next;
+}
+
+void trigger_pendsv(void)
+{
+    SCB->ICSR |= SCB_ICSR_PENDSVSET_Msk;
+}
+
 
 void task_delay(uint32_t delay_ms)
 {
-    current_task->wake_tick =
-        HAL_GetTick() + delay_ms;
-
+    current_task->wake_tick = HAL_GetTick() + delay_ms;
     current_task->state = TASK_BLOCKED;
+
+    volatile task_state_t s = current_task->state;   // breakpoint here
+
+    trigger_pendsv();
 }
 
 task_t* get_next_task(void)
@@ -160,28 +125,62 @@ task_t* get_next_task(void)
     return highest_task;
 }
 /* USER CODE END 0 */
-void context_switch(task_t *next)
+static inline void set_control(uint32_t control)
 {
-    save_context(current_task);
-
-    current_task = next;
-
-    restore_context(current_task);
+    __set_CONTROL(control);
 }
 
-void save_context(task_t *task)
+static inline uint32_t get_control(void)
 {
-    for(int i = 0; i < 8; i++)
-    {
-        task->saved_regs[i] = 0x44440000 + i;
-    }
-
-    task->sp = (uint32_t *)get_psp();
+    return __get_CONTROL();
 }
 
-void restore_context(task_t *task)
+static inline void set_psp(uint32_t psp)
 {
-    set_psp((uint32_t)task->sp);
+    __set_PSP(psp);
+}
+
+static inline uint32_t get_psp(void)
+{
+    return __get_PSP();
+}
+__attribute__((naked)) void save_context(void)
+{
+    __asm volatile(
+        "MRS R0, PSP        \n"
+        "STMDB R0!, {R4-R11}\n"
+        "MSR PSP, R0        \n"
+        "BX LR              \n"
+    );
+}
+
+__attribute__((naked)) void restore_context(void)
+{
+    __asm volatile(
+        "MRS R0, PSP        \n"
+        "LDMIA R0!, {R4-R11}\n"
+        "MSR PSP, R0        \n"
+        "BX LR              \n"
+    );
+}
+
+
+void save_current_task_context(void)
+{
+    save_context();
+
+    current_task->sp = (uint32_t *)__get_PSP();
+}
+
+void restore_current_task_context(void)
+{
+    __set_PSP((uint32_t)current_task->sp);
+
+    restore_context();
+}
+void start_scheduler(void)
+{
+    __asm volatile("SVC #0");
 }
 /* USER CODE END PFP */
 void init_task_stack(task_t *task)
@@ -191,8 +190,8 @@ void init_task_stack(task_t *task)
     sp = &task->stack[STACK_SIZE - 1];
 
     *(sp--) = 0x01000000;               // xPSR
-    *(sp--) = (uint32_t)task->task_func; // PC
-    *(sp--) = 0xFFFFFFFD;               // LR (placeholder)
+    *(sp--) = ((uint32_t)task->task_func) | 1U; // PC
+    *(sp--) = (uint32_t)task_exit_error;             // LR (placeholder)
 
     *(sp--) = 0; // R12
     *(sp--) = 0; // R3
@@ -242,8 +241,8 @@ int main(void)
 
   /* USER CODE BEGIN 1 */
 	current_task = &tasks[0];
+	volatile uint32_t task_S = sizeof(task_t);
   /* USER CODE END 1 */
-
   /* MCU Configuration--------------------------------------------------------*/
 
   /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
@@ -272,51 +271,22 @@ int main(void)
       init_task_stack(&tasks[i]);
   }
 
-  set_psp((uint32_t)tasks[0].sp);
+  current_task = &tasks[1];   // highest priority
 
-  set_control(get_control() | 0x02);
+  start_scheduler();
 
-  __ISB();
-
+//  set_psp((uint32_t)tasks[0].sp);
+//
+//  set_control(get_control() | 0x02);
+//
+//  __ISB();
+//
+//  save_task_context();
   /* USER CODE END 2 */
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-    /* USER CODE END WHILE */
-//    MX_USB_HOST_Process();
-
-	    uint32_t now = HAL_GetTick();
-
-	    /* Wake blocked tasks */
-	    for(int i = 0; i < NUM_TASKS; i++)
-	    {
-	        if((tasks[i].state == TASK_BLOCKED) &&
-	           (now >= tasks[i].wake_tick))
-	        {
-	            tasks[i].state = TASK_READY;
-	        }
-	    }
-
-	    /* Select highest priority READY task */
-	    next_task = get_next_task();
-
-	    if(next_task != NULL)
-	    {
-	    	if(next_task != current_task)
-	    	{
-	    	    context_switch(next_task);
-	    	}
-
-	    	current_task->state = TASK_RUNNING;
-	    	current_task->task_func();
-	    }
-
-	    if(current_task->state == TASK_RUNNING)
-	    {
-	        current_task->state = TASK_READY;
-	    }
-    /* USER CODE BEGIN 3 */
   }
   /* USER CODE END 3 */
 }
@@ -367,7 +337,10 @@ void SystemClock_Config(void)
 }
 
 /* USER CODE BEGIN 4 */
-
+void task_exit_error(void)
+{
+    while(1);
+}
 /* USER CODE END 4 */
 
 /**
@@ -383,6 +356,13 @@ void Error_Handler(void)
   {
   }
   /* USER CODE END Error_Handler_Debug */
+}
+
+void task_yield(void)
+{
+    HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_15);   // Blue
+
+    trigger_pendsv();
 }
 #ifdef USE_FULL_ASSERT
 /**
