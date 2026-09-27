@@ -2,7 +2,7 @@
 
 A learning-focused project to build a preemptive RTOS from scratch on the STM32F407 Discovery board.
 
-The goal of this project is to understand how a Cortex-M RTOS works internally — from task creation and stack initialization to exception handling, scheduling, context switching, delays, and synchronization — without relying on an existing RTOS library.
+The goal of this project is to understand how a Cortex-M RTOS works internally, from task creation and stack initialization to exception handling, scheduling, context switching, delays, and synchronization, without relying on an existing RTOS library.
 
 ---
 
