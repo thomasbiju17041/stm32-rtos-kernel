@@ -21,6 +21,7 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "stm32f4xx_it.h"
+#include "stdbool.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 extern task_t *current_task;
@@ -221,7 +222,6 @@ __attribute__((naked)) void PendSV_Handler(void)
 void SysTick_Handler(void)
 {
     HAL_IncTick();  // Blue LED
-
     uint32_t now = HAL_GetTick();
 
     for(int i = 0; i < NUM_TASKS; i++)
@@ -230,11 +230,11 @@ void SysTick_Handler(void)
     	   now >= tasks[i].wake_tick)
     	{
     	    tasks[i].state = TASK_READY;
-            HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_15); // blue
+//            HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_15); // blue
     	}
     }
 
-    trigger_pendsv();
+	trigger_pendsv();
 }
 
 /******************************************************************************/

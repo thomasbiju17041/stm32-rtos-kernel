@@ -59,9 +59,8 @@ void led_green_task(void)
     {
         HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_12);
 
-        task_delay(500);
+        for(volatile uint32_t i = 0; i < 1000000; i++);
     }
-
 }
 
 void led_orange_task(void)
@@ -70,9 +69,31 @@ void led_orange_task(void)
     {
         HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13);
 
-        task_delay(500);
+        for(volatile uint32_t i = 0; i < 1000000; i++);
     }
+}
 
+
+void schedule_next_task(void)
+{
+    task_t *prev = current_task;
+    task_t *next = get_next_task();
+
+    if(next != NULL)
+    {
+        if(prev->state == TASK_RUNNING)
+        {
+            prev->state = TASK_READY;
+        }
+
+        current_task = next;
+        current_task->state = TASK_RUNNING;
+    }
+}
+
+void trigger_pendsv(void)
+{
+    SCB->ICSR |= SCB_ICSR_PENDSVSET_Msk;
 }
 
 void idle_task(void)
@@ -82,47 +103,45 @@ void idle_task(void)
         __WFI();
     }
 }
-void schedule_next_task(void)
-{
-    task_t *next = get_next_task();
-
-    if(next != NULL)
-        current_task = next;
-}
-
-void trigger_pendsv(void)
-{
-    SCB->ICSR |= SCB_ICSR_PENDSVSET_Msk;
-}
-
-
 void task_delay(uint32_t delay_ms)
 {
     current_task->wake_tick = HAL_GetTick() + delay_ms;
     current_task->state = TASK_BLOCKED;
-
-    volatile task_state_t s = current_task->state;   // breakpoint here
 
     trigger_pendsv();
 }
 
 task_t* get_next_task(void)
 {
-    task_t *highest_task = NULL;
+    int current_index = current_task - tasks;
 
+    uint32_t highest_priority = 0;
+
+    /* Find highest READY priority */
     for(int i = 0; i < NUM_TASKS; i++)
     {
         if(tasks[i].state == TASK_READY)
         {
-            if((highest_task == NULL) ||
-               (tasks[i].priority > highest_task->priority))
+            if(tasks[i].priority > highest_priority)
             {
-                highest_task = &tasks[i];
+                highest_priority = tasks[i].priority;
             }
         }
     }
 
-    return highest_task;
+    /* Search circularly starting after current task */
+    for(int i = 1; i <= NUM_TASKS; i++)
+    {
+        int index = (current_index + i) % NUM_TASKS;
+
+        if(tasks[index].state == TASK_READY &&
+           tasks[index].priority == highest_priority)
+        {
+            return &tasks[index];
+        }
+    }
+
+    return NULL;
 }
 /* USER CODE END 0 */
 static inline void set_control(uint32_t control)
@@ -182,6 +201,46 @@ void start_scheduler(void)
 {
     __asm volatile("SVC #0");
 }
+
+void sem_init(semaphore_t *sem, uint8_t initial)
+{
+    sem->available = initial;
+}
+
+void sem_take(semaphore_t *sem)
+{
+    while(1)
+    {
+        if(sem->available)
+        {
+            sem->available = 0;
+            current_task->waiting_sem = NULL;
+            return;
+        }
+
+        current_task->waiting_sem = sem;
+        current_task->state = TASK_BLOCKED;
+
+        trigger_pendsv();
+    }
+}
+
+void sem_give(semaphore_t *sem)
+{
+    sem->available = 1;
+
+    for(int i = 0; i < NUM_TASKS; i++)
+    {
+        if(tasks[i].state == TASK_BLOCKED &&
+           tasks[i].waiting_sem == sem)
+        {
+            tasks[i].state = TASK_READY;
+            tasks[i].waiting_sem = NULL;
+        }
+    }
+
+    trigger_pendsv();
+}
 /* USER CODE END PFP */
 void init_task_stack(task_t *task)
 {
@@ -215,7 +274,7 @@ task_t tasks[NUM_TASKS] =
 {
     {
         .wake_tick = 0,
-        .priority = 2,
+        .priority = 5,
         .state = TASK_READY,
         .task_func = led_green_task
     },
@@ -225,7 +284,16 @@ task_t tasks[NUM_TASKS] =
         .priority = 5,
         .state = TASK_READY,
         .task_func = led_orange_task
+    },
+
+    {
+        .wake_tick = 0,
+        .priority = 0,
+        .state = TASK_READY,
+        .task_func = idle_task
     }
+
+
 };
 
 
@@ -241,7 +309,6 @@ int main(void)
 
   /* USER CODE BEGIN 1 */
 	current_task = &tasks[0];
-	volatile uint32_t task_S = sizeof(task_t);
   /* USER CODE END 1 */
   /* MCU Configuration--------------------------------------------------------*/
 
@@ -360,7 +427,7 @@ void Error_Handler(void)
 
 void task_yield(void)
 {
-    HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_15);   // Blue
+//    HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_15);   // Blue
 
     trigger_pendsv();
 }

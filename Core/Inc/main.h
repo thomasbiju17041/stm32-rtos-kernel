@@ -46,7 +46,7 @@ extern "C" {
 
 /* Exported macro ------------------------------------------------------------*/
 /* USER CODE BEGIN EM */
-#define NUM_TASKS 2
+#define NUM_TASKS 3
 #define STACK_SIZE 128
 
 
@@ -61,6 +61,10 @@ typedef enum
 
 typedef struct
 {
+    uint8_t available;
+} semaphore_t;
+typedef struct
+{
     uint32_t *sp;
 
     uint32_t stack[STACK_SIZE];
@@ -71,9 +75,13 @@ typedef struct
 
     task_state_t state;
 
+    semaphore_t *waiting_sem;
+
     void (*task_func)(void);
 
 } task_t;
+
+
 /* USER CODE END PD */
 extern task_t tasks[];
 void task_delay(uint32_t delay_ms);
@@ -88,6 +96,9 @@ void trigger_pendsv(void);
 void schedule_next_task(void);
 void idle_task(void);
 void task_yield(void);
+void sem_init(semaphore_t *sem, uint8_t initial);
+void sem_take(semaphore_t *sem);
+void sem_give(semaphore_t *sem);
 /* USER CODE END EM */
 
 /* Exported functions prototypes ---------------------------------------------*/
